@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"log"
 	"net/http"
@@ -9,16 +10,20 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+
+	config "github.com/Miklakapi/chaos-proxy/internal/config"
 )
 
 func main() {
 	appCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	config := struct {
-		Port string
-	}{
-		Port: "5050",
+	configPath := flag.String("config", "config.yaml", "path to config file")
+	flag.Parse()
+
+	cfg, err := config.New(*configPath)
+	if err != nil {
+		log.Fatalf("config error: %v", err)
 	}
 
 	mux := http.NewServeMux()
@@ -32,12 +37,16 @@ func main() {
 	})
 
 	srv := &http.Server{
-		Addr:    ":" + config.Port,
-		Handler: mux,
+		Addr:         cfg.Server.Listen,
+		Handler:      mux,
+		ReadTimeout:  cfg.Server.ReadTimeout,
+		WriteTimeout: cfg.Server.WriteTimeout,
+		IdleTimeout:  cfg.Server.IdleTimeout,
 	}
 
 	go func() {
-		log.Println("HTTP server started on :" + config.Port)
+		log.Println("HTTP server started on " + cfg.Server.Listen)
+
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("listen error: %v", err)
 		}
@@ -58,5 +67,4 @@ func main() {
 	}
 
 	log.Println("server stopped gracefully")
-
 }

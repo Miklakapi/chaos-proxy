@@ -8,9 +8,19 @@ import (
 	"github.com/Miklakapi/chaos-proxy/internal/config"
 )
 
-func ChaosProxyHandler(cfg config.ProxyConfig) http.HandlerFunc {
-	target, _ := url.Parse(cfg.Target)
+type ResponseMiddleware func(resp *http.Response) error
+
+func NewChaosProxyHandler(cfg config.ProxyConfig, responseMiddleware ResponseMiddleware) (http.HandlerFunc, error) {
+	target, err := url.Parse(cfg.Target)
+	if err != nil {
+		return nil, err
+	}
+
 	proxy := httputil.NewSingleHostReverseProxy(target)
+
+	if responseMiddleware != nil {
+		proxy.ModifyResponse = responseMiddleware
+	}
 
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !cfg.PreserveHost {
@@ -22,5 +32,5 @@ func ChaosProxyHandler(cfg config.ProxyConfig) http.HandlerFunc {
 		}
 
 		proxy.ServeHTTP(w, r)
-	}
+	}, nil
 }

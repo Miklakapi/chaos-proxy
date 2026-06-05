@@ -26,8 +26,15 @@ func main() {
 		log.Fatalf("config error: %v", err)
 	}
 
+	chaosMiddleware := api.NewChaosMiddleware(cfg.Chaos)
+	chaosResponseMiddleware := api.NewChaosResponseMiddleware(cfg.Chaos)
+	chaosProxyHandler, err := api.NewChaosProxyHandler(cfg.Proxy, chaosResponseMiddleware)
+	if err != nil {
+		log.Fatalf("proxy error %v", err)
+	}
+
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", api.ChaosMiddleware(api.ChaosProxyHandler(cfg.Proxy)))
+	mux.HandleFunc("/", chaosMiddleware(chaosProxyHandler))
 
 	srv := &http.Server{
 		Addr:         cfg.Server.Listen,

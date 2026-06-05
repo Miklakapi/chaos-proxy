@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"flag"
-	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -11,7 +10,8 @@ import (
 	"syscall"
 	"time"
 
-	config "github.com/Miklakapi/chaos-proxy/internal/config"
+	"github.com/Miklakapi/chaos-proxy/internal/api"
+	"github.com/Miklakapi/chaos-proxy/internal/config"
 )
 
 func main() {
@@ -27,14 +27,7 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-
-		_, err := fmt.Fprint(w, "ok")
-		if err != nil {
-			log.Printf("failed to write response %v", err)
-		}
-	})
+	mux.HandleFunc("/", api.ChaosMiddleware(api.ChaosProxyHandler(cfg.Proxy)))
 
 	srv := &http.Server{
 		Addr:         cfg.Server.Listen,
@@ -46,8 +39,8 @@ func main() {
 
 	go func() {
 		log.Println("HTTP server started on " + cfg.Server.Listen)
-		log.Println("Target: " + cfg.Proxy.Target)
 		log.Println("Chaos enabled: ", cfg.Chaos.Enable)
+		log.Println("Target: " + cfg.Proxy.Target)
 
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("listen error: %v", err)

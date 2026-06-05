@@ -46,6 +46,8 @@ func main() {
 
 	go func() {
 		log.Println("HTTP server started on " + cfg.Server.Listen)
+		log.Println("Target: " + cfg.Proxy.Target)
+		log.Println("Chaos enabled: ", cfg.Chaos.Enable)
 
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("listen error: %v", err)

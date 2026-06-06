@@ -28,6 +28,11 @@ type FailingReadCloser struct {
 	bytesLeft int64
 }
 
+type ThrottledReadCloser struct {
+	reader         io.ReadCloser
+	bytesPerSecond int64
+}
+
 func NewChaosMiddleware(cfg config.ChaosConfig) func(http.HandlerFunc) http.HandlerFunc {
 	return func(handler http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
@@ -75,6 +80,14 @@ func NewChaosMiddleware(cfg config.ChaosConfig) func(http.HandlerFunc) http.Hand
 				}
 			}
 
+			if cfg.BandwidthLimit.Enable && cfg.BandwidthLimit.Request.Enable {
+				limited := BandwidthLimitRequestHandler(r, cfg.BandwidthLimit.Request)
+				if limited {
+					requestLog.Status = "limited"
+					requestLog.Chaos = append(requestLog.Chaos, "bandwidth_limit.request")
+				}
+			}
+
 			handler(w, r)
 		}
 	}
@@ -89,15 +102,7 @@ func NewChaosResponseMiddleware(cfg config.ChaosConfig) ResponseMiddleware {
 		}
 
 		if cfg.ConnectionFailure.Enable && cfg.ConnectionFailure.Response.Enable {
-			dropped, err := ConnectionResponseFailureHandler(resp, cfg.ConnectionFailure.Response)
-			if err != nil {
-				requestLog.Status = "connection_failure_failed"
-				requestLog.Chaos = append(requestLog.Chaos, "connection_failure.response_error")
-				log.Printf("connection failure response failed: %v", err)
-
-				return nil
-			}
-
+			dropped := ConnectionResponseFailureHandler(resp, cfg.ConnectionFailure.Response)
 			if dropped {
 				requestLog.Status = "dropped"
 				requestLog.Chaos = append(requestLog.Chaos, "connection_failure.response")
@@ -110,6 +115,14 @@ func NewChaosResponseMiddleware(cfg config.ChaosConfig) ResponseMiddleware {
 			if delayed {
 				requestLog.Status = "delayed"
 				requestLog.Chaos = append(requestLog.Chaos, "latency.response")
+			}
+		}
+
+		if cfg.BandwidthLimit.Enable && cfg.BandwidthLimit.Response.Enable {
+			limited := BandwidthLimitResponseHandler(resp, cfg.BandwidthLimit.Response)
+			if limited {
+				requestLog.Status = "limited"
+				requestLog.Chaos = append(requestLog.Chaos, "bandwidth_limit.response")
 			}
 		}
 
@@ -136,9 +149,9 @@ func ConnectionRequestFailureHandler(w http.ResponseWriter, cfg config.Connectio
 	return true, nil
 }
 
-func ConnectionResponseFailureHandler(r *http.Response, cfg config.ConnectionFailureResponseConfig) (bool, error) {
+func ConnectionResponseFailureHandler(r *http.Response, cfg config.ConnectionFailureResponseConfig) bool {
 	if !ShouldApply(cfg.Probability) {
-		return false, nil
+		return false
 	}
 
 	maxBytes := RandomBytesInRange(cfg.AfterBytesMin, cfg.AfterBytesMax)
@@ -146,7 +159,7 @@ func ConnectionResponseFailureHandler(r *http.Response, cfg config.ConnectionFai
 	r.Body = NewFailingReadCloser(r.Body, maxBytes)
 	r.Close = true
 
-	return true, nil
+	return true
 }
 
 func LatencyHandler(cfg config.LatencyPhaseConfig) bool {
@@ -155,6 +168,32 @@ func LatencyHandler(cfg config.LatencyPhaseConfig) bool {
 	}
 
 	time.Sleep(RandomDurationInRange(cfg.Min, cfg.Max))
+
+	return true
+}
+
+func BandwidthLimitRequestHandler(r *http.Request, cfg config.BandwidthLimitPhaseConfig) bool {
+	if !ShouldApply(cfg.Probability) {
+		return false
+	}
+
+	maxBytes := RandomBytesInRange(cfg.BytesPerSecondMin, cfg.BytesPerSecondMax)
+
+	r.Body = NewThrottledReadCloser(r.Body, maxBytes)
+	r.Close = true
+
+	return true
+}
+
+func BandwidthLimitResponseHandler(r *http.Response, cfg config.BandwidthLimitPhaseConfig) bool {
+	if !ShouldApply(cfg.Probability) {
+		return false
+	}
+
+	maxBytes := RandomBytesInRange(cfg.BytesPerSecondMin, cfg.BytesPerSecondMax)
+
+	r.Body = NewThrottledReadCloser(r.Body, maxBytes)
+	r.Close = true
 
 	return true
 }
@@ -203,6 +242,31 @@ func (f *FailingReadCloser) Read(p []byte) (int, error) {
 
 func (f *FailingReadCloser) Close() error {
 	return f.reader.Close()
+}
+
+func NewThrottledReadCloser(reader io.ReadCloser, bytesPerSecond int64) *ThrottledReadCloser {
+	return &ThrottledReadCloser{
+		reader:         reader,
+		bytesPerSecond: bytesPerSecond,
+	}
+}
+
+func (t *ThrottledReadCloser) Read(p []byte) (int, error) {
+	n, err := t.reader.Read(p)
+	if err != nil {
+		return n, err
+	}
+
+	if n > 0 {
+		duration := time.Duration(float64(n) / float64(t.bytesPerSecond) * float64(time.Second))
+		time.Sleep(duration)
+	}
+
+	return n, nil
+}
+
+func (t *ThrottledReadCloser) Close() error {
+	return t.reader.Close()
 }
 
 func GetRequestLog(ctx context.Context) *RequestLog {

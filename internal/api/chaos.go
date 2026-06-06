@@ -177,9 +177,9 @@ func BandwidthLimitRequestHandler(r *http.Request, cfg config.BandwidthLimitPhas
 		return false
 	}
 
-	maxBytes := RandomBytesInRange(cfg.BytesPerSecondMin, cfg.BytesPerSecondMax)
+	bytesPerSecond := RandomBytesInRange(cfg.BytesPerSecondMin, cfg.BytesPerSecondMax)
 
-	r.Body = NewThrottledReadCloser(r.Body, maxBytes)
+	r.Body = NewThrottledReadCloser(r.Body, bytesPerSecond)
 	r.Close = true
 
 	return true
@@ -190,9 +190,9 @@ func BandwidthLimitResponseHandler(r *http.Response, cfg config.BandwidthLimitPh
 		return false
 	}
 
-	maxBytes := RandomBytesInRange(cfg.BytesPerSecondMin, cfg.BytesPerSecondMax)
+	bytesPerSecond := RandomBytesInRange(cfg.BytesPerSecondMin, cfg.BytesPerSecondMax)
 
-	r.Body = NewThrottledReadCloser(r.Body, maxBytes)
+	r.Body = NewThrottledReadCloser(r.Body, bytesPerSecond)
 	r.Close = true
 
 	return true
@@ -223,7 +223,7 @@ func (f *FailingReadCloser) Read(p []byte) (int, error) {
 	}
 
 	if int64(len(p)) > f.bytesLeft {
-		p = p[:f.bytesLeft]
+		p = p[:int(f.bytesLeft)]
 	}
 
 	n, err := f.reader.Read(p)

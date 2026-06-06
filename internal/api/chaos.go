@@ -61,6 +61,14 @@ func NewChaosMiddleware(cfg config.ChaosConfig) func(http.HandlerFunc) http.Hand
 				}
 			}
 
+			if cfg.Latency.Enable && cfg.Latency.Request.Enable {
+				delayed := LatencyHandler(cfg.Latency.Request)
+				if delayed {
+					requestLog.Status = "delayed"
+					requestLog.Chaos = append(requestLog.Chaos, "latency.request")
+				}
+			}
+
 			handler(w, r)
 		}
 	}
@@ -101,8 +109,22 @@ func ConnectionFailureHandler(w http.ResponseWriter, cfg config.ConnectionFailur
 	return true, nil
 }
 
+func LatencyHandler(cfg config.LatencyPhaseConfig) bool {
+	if !ShouldApply(cfg.Probability) {
+		return false
+	}
+
+	time.Sleep(RandomDurationInRange(cfg.Min, cfg.Max))
+
+	return true
+}
+
 func ShouldApply(probability float64) bool {
 	return rand.Float64() < probability
+}
+
+func RandomDurationInRange(min time.Duration, max time.Duration) time.Duration {
+	return time.Duration(rand.Int64N(int64(max-min)+1) + int64(min))
 }
 
 func GetRequestLog(ctx context.Context) *RequestLog {

@@ -3,7 +3,6 @@ package api
 import (
 	"context"
 	"fmt"
-	"io"
 	"log"
 	"math/rand/v2"
 	"net/http"
@@ -21,16 +20,6 @@ type RequestLog struct {
 	Status  string
 	Chaos   []string
 	Started time.Time
-}
-
-type FailingReadCloser struct {
-	reader    io.ReadCloser
-	bytesLeft int64
-}
-
-type ThrottledReadCloser struct {
-	reader         io.ReadCloser
-	bytesPerSecond int64
 }
 
 func NewChaosMiddleware(cfg config.ChaosConfig) func(http.HandlerFunc) http.HandlerFunc {
@@ -126,141 +115,12 @@ func NewChaosResponseMiddleware(cfg config.ChaosConfig) ResponseMiddleware {
 	}
 }
 
-func ConnectionRequestFailureHandler(w http.ResponseWriter, cfg config.ConnectionFailureRequestConfig) (bool, error) {
-	if !ShouldApply(cfg.Probability) {
-		return false, nil
-	}
-
-	controller := http.NewResponseController(w)
-
-	conn, _, err := controller.Hijack()
-	if err != nil {
-		return false, err
-	}
-
-	if err := conn.Close(); err != nil {
-		return false, err
-	}
-
-	return true, nil
-}
-
-func ConnectionResponseFailureHandler(r *http.Response, cfg config.ConnectionFailureResponseConfig) bool {
-	if !ShouldApply(cfg.Probability) {
-		return false
-	}
-
-	maxBytes := RandomBytesInRange(cfg.AfterBytesMin, cfg.AfterBytesMax)
-
-	r.Body = NewFailingReadCloser(r.Body, maxBytes)
-	r.Close = true
-
-	return true
-}
-
-func LatencyHandler(cfg config.LatencyPhaseConfig) bool {
-	if !ShouldApply(cfg.Probability) {
-		return false
-	}
-
-	time.Sleep(RandomDurationInRange(cfg.Min, cfg.Max))
-
-	return true
-}
-
-func BandwidthLimitRequestHandler(r *http.Request, cfg config.BandwidthLimitPhaseConfig) bool {
-	if !ShouldApply(cfg.Probability) {
-		return false
-	}
-
-	bytesPerSecond := RandomBytesInRange(cfg.BytesPerSecondMin, cfg.BytesPerSecondMax)
-
-	r.Body = NewThrottledReadCloser(r.Body, bytesPerSecond)
-
-	return true
-}
-
-func BandwidthLimitResponseHandler(r *http.Response, cfg config.BandwidthLimitPhaseConfig) bool {
-	if !ShouldApply(cfg.Probability) {
-		return false
-	}
-
-	bytesPerSecond := RandomBytesInRange(cfg.BytesPerSecondMin, cfg.BytesPerSecondMax)
-
-	r.Body = NewThrottledReadCloser(r.Body, bytesPerSecond)
-
-	return true
-}
-
 func ShouldApply(probability float64) bool {
 	return rand.Float64() < probability
 }
 
-func RandomDurationInRange(min time.Duration, max time.Duration) time.Duration {
-	return time.Duration(rand.Int64N(int64(max-min)+1) + int64(min))
-}
-
 func RandomBytesInRange(min int64, max int64) int64 {
 	return rand.Int64N(max-min+1) + min
-}
-
-func NewFailingReadCloser(reader io.ReadCloser, bytesBeforeFailure int64) *FailingReadCloser {
-	return &FailingReadCloser{
-		reader:    reader,
-		bytesLeft: bytesBeforeFailure,
-	}
-}
-
-func (f *FailingReadCloser) Read(p []byte) (int, error) {
-	if f.bytesLeft <= 0 {
-		return 0, io.ErrUnexpectedEOF
-	}
-
-	if int64(len(p)) > f.bytesLeft {
-		p = p[:int(f.bytesLeft)]
-	}
-
-	n, err := f.reader.Read(p)
-	f.bytesLeft -= int64(n)
-
-	if err != nil {
-		return n, err
-	}
-
-	if f.bytesLeft <= 0 {
-		return n, io.ErrUnexpectedEOF
-	}
-
-	return n, nil
-}
-
-func (f *FailingReadCloser) Close() error {
-	return f.reader.Close()
-}
-
-func NewThrottledReadCloser(reader io.ReadCloser, bytesPerSecond int64) *ThrottledReadCloser {
-	return &ThrottledReadCloser{
-		reader:         reader,
-		bytesPerSecond: bytesPerSecond,
-	}
-}
-
-func (t *ThrottledReadCloser) Read(p []byte) (int, error) {
-	n, err := t.reader.Read(p)
-	if err != nil {
-		return n, err
-	}
-
-	if n > 0 {
-		duration := time.Duration(float64(n) / float64(t.bytesPerSecond) * float64(time.Second))
-		time.Sleep(duration)
-	}
-
-	return n, nil
-}
-
-func (t *ThrottledReadCloser) Close() error {
-	return t.reader.Close()
 }
 
 func GetRequestLog(ctx context.Context) *RequestLog {

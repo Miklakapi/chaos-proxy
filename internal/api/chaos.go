@@ -57,8 +57,8 @@ func NewChaosMiddleware(cfg config.ChaosConfig) func(http.HandlerFunc) http.Hand
 			if cfg.ConnectionFailure.Enable && cfg.ConnectionFailure.Request.Enable {
 				dropped, err := ConnectionRequestFailureHandler(w, cfg.ConnectionFailure.Request)
 				if err != nil {
-					requestLog.Status = "connection_failure_failed"
-					requestLog.Chaos = append(requestLog.Chaos, "connection_failure.request_error")
+					SetRequestLogStatus(requestLog, "chaos_error")
+					AddChaosLog(requestLog, "connection_failure.request_error")
 					log.Printf("connection failure request failed: %v", err)
 
 					handler(w, r)
@@ -66,8 +66,8 @@ func NewChaosMiddleware(cfg config.ChaosConfig) func(http.HandlerFunc) http.Hand
 				}
 
 				if dropped {
-					requestLog.Status = "dropped"
-					requestLog.Chaos = append(requestLog.Chaos, "connection_failure.request")
+					SetRequestLogStatus(requestLog, "dropped")
+					AddChaosLog(requestLog, "connection_failure.request")
 					return
 				}
 			}
@@ -75,16 +75,14 @@ func NewChaosMiddleware(cfg config.ChaosConfig) func(http.HandlerFunc) http.Hand
 			if cfg.Latency.Enable && cfg.Latency.Request.Enable {
 				delayed := LatencyHandler(cfg.Latency.Request)
 				if delayed {
-					requestLog.Status = "delayed"
-					requestLog.Chaos = append(requestLog.Chaos, "latency.request")
+					AddChaosLog(requestLog, "latency.request")
 				}
 			}
 
 			if cfg.BandwidthLimit.Enable && cfg.BandwidthLimit.Request.Enable {
 				limited := BandwidthLimitRequestHandler(r, cfg.BandwidthLimit.Request)
 				if limited {
-					requestLog.Status = "limited"
-					requestLog.Chaos = append(requestLog.Chaos, "bandwidth_limit.request")
+					AddChaosLog(requestLog, "bandwidth_limit.request")
 				}
 			}
 
@@ -101,28 +99,26 @@ func NewChaosResponseMiddleware(cfg config.ChaosConfig) ResponseMiddleware {
 			return nil
 		}
 
-		if cfg.ConnectionFailure.Enable && cfg.ConnectionFailure.Response.Enable {
-			dropped := ConnectionResponseFailureHandler(resp, cfg.ConnectionFailure.Response)
-			if dropped {
-				requestLog.Status = "dropped"
-				requestLog.Chaos = append(requestLog.Chaos, "connection_failure.response")
-				return nil
-			}
-		}
-
 		if cfg.Latency.Enable && cfg.Latency.Response.Enable {
 			delayed := LatencyHandler(cfg.Latency.Response)
 			if delayed {
-				requestLog.Status = "delayed"
-				requestLog.Chaos = append(requestLog.Chaos, "latency.response")
+				AddChaosLog(requestLog, "latency.response")
 			}
 		}
 
 		if cfg.BandwidthLimit.Enable && cfg.BandwidthLimit.Response.Enable {
 			limited := BandwidthLimitResponseHandler(resp, cfg.BandwidthLimit.Response)
 			if limited {
-				requestLog.Status = "limited"
-				requestLog.Chaos = append(requestLog.Chaos, "bandwidth_limit.response")
+				AddChaosLog(requestLog, "bandwidth_limit.response")
+			}
+		}
+
+		if cfg.ConnectionFailure.Enable && cfg.ConnectionFailure.Response.Enable {
+			dropped := ConnectionResponseFailureHandler(resp, cfg.ConnectionFailure.Response)
+			if dropped {
+				SetRequestLogStatus(requestLog, "dropped")
+				AddChaosLog(requestLog, "connection_failure.response")
+				return nil
 			}
 		}
 
@@ -180,7 +176,6 @@ func BandwidthLimitRequestHandler(r *http.Request, cfg config.BandwidthLimitPhas
 	bytesPerSecond := RandomBytesInRange(cfg.BytesPerSecondMin, cfg.BytesPerSecondMax)
 
 	r.Body = NewThrottledReadCloser(r.Body, bytesPerSecond)
-	r.Close = true
 
 	return true
 }
@@ -193,7 +188,6 @@ func BandwidthLimitResponseHandler(r *http.Response, cfg config.BandwidthLimitPh
 	bytesPerSecond := RandomBytesInRange(cfg.BytesPerSecondMin, cfg.BytesPerSecondMax)
 
 	r.Body = NewThrottledReadCloser(r.Body, bytesPerSecond)
-	r.Close = true
 
 	return true
 }
@@ -283,6 +277,22 @@ func GetRequestLog(ctx context.Context) *RequestLog {
 	return requestLog
 }
 
+func AddChaosLog(requestLog *RequestLog, chaos string) {
+	if requestLog == nil {
+		return
+	}
+
+	requestLog.Chaos = append(requestLog.Chaos, chaos)
+}
+
+func SetRequestLogStatus(requestLog *RequestLog, status string) {
+	if requestLog == nil {
+		return
+	}
+
+	requestLog.Status = status
+}
+
 func WriteRequestLog(requestLog *RequestLog) {
 	duration := time.Since(requestLog.Started)
 
@@ -304,7 +314,7 @@ func WriteRequestLog(requestLog *RequestLog) {
 }
 
 func ColorizeRequestLog(message string, requestLog *RequestLog) string {
-	if requestLog.Status == "connection_failure_failed" {
+	if requestLog.Status == "chaos_error" {
 		return "\033[31m" + message + "\033[0m"
 	}
 

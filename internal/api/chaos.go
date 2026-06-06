@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"math/rand/v2"
 	"net/http"
@@ -20,6 +21,11 @@ type RequestLog struct {
 	Status  string
 	Chaos   []string
 	Started time.Time
+}
+
+type FailingReadCloser struct {
+	reader    io.ReadCloser
+	bytesLeft int64
 }
 
 func NewChaosMiddleware(cfg config.ChaosConfig) func(http.HandlerFunc) http.HandlerFunc {
@@ -44,7 +50,7 @@ func NewChaosMiddleware(cfg config.ChaosConfig) func(http.HandlerFunc) http.Hand
 			}
 
 			if cfg.ConnectionFailure.Enable && cfg.ConnectionFailure.Request.Enable {
-				dropped, err := ConnectionFailureHandler(w, cfg.ConnectionFailure.Request)
+				dropped, err := ConnectionRequestFailureHandler(w, cfg.ConnectionFailure.Request)
 				if err != nil {
 					requestLog.Status = "connection_failure_failed"
 					requestLog.Chaos = append(requestLog.Chaos, "connection_failure.request_error")
@@ -82,15 +88,36 @@ func NewChaosResponseMiddleware(cfg config.ChaosConfig) ResponseMiddleware {
 			return nil
 		}
 
-		if requestLog != nil && resp != nil {
-			requestLog.Status = "proxied"
+		if cfg.ConnectionFailure.Enable && cfg.ConnectionFailure.Response.Enable {
+			dropped, err := ConnectionResponseFailureHandler(resp, cfg.ConnectionFailure.Response)
+			if err != nil {
+				requestLog.Status = "connection_failure_failed"
+				requestLog.Chaos = append(requestLog.Chaos, "connection_failure.response_error")
+				log.Printf("connection failure response failed: %v", err)
+
+				return nil
+			}
+
+			if dropped {
+				requestLog.Status = "dropped"
+				requestLog.Chaos = append(requestLog.Chaos, "connection_failure.response")
+				return nil
+			}
+		}
+
+		if cfg.Latency.Enable && cfg.Latency.Response.Enable {
+			delayed := LatencyHandler(cfg.Latency.Response)
+			if delayed {
+				requestLog.Status = "delayed"
+				requestLog.Chaos = append(requestLog.Chaos, "latency.response")
+			}
 		}
 
 		return nil
 	}
 }
 
-func ConnectionFailureHandler(w http.ResponseWriter, cfg config.ConnectionFailureRequestConfig) (bool, error) {
+func ConnectionRequestFailureHandler(w http.ResponseWriter, cfg config.ConnectionFailureRequestConfig) (bool, error) {
 	if !ShouldApply(cfg.Probability) {
 		return false, nil
 	}
@@ -105,6 +132,19 @@ func ConnectionFailureHandler(w http.ResponseWriter, cfg config.ConnectionFailur
 	if err := conn.Close(); err != nil {
 		return false, err
 	}
+
+	return true, nil
+}
+
+func ConnectionResponseFailureHandler(r *http.Response, cfg config.ConnectionFailureResponseConfig) (bool, error) {
+	if !ShouldApply(cfg.Probability) {
+		return false, nil
+	}
+
+	maxBytes := RandomBytesInRange(cfg.AfterBytesMin, cfg.AfterBytesMax)
+
+	r.Body = NewFailingReadCloser(r.Body, maxBytes)
+	r.Close = true
 
 	return true, nil
 }
@@ -125,6 +165,44 @@ func ShouldApply(probability float64) bool {
 
 func RandomDurationInRange(min time.Duration, max time.Duration) time.Duration {
 	return time.Duration(rand.Int64N(int64(max-min)+1) + int64(min))
+}
+
+func RandomBytesInRange(min int64, max int64) int64 {
+	return rand.Int64N(max-min+1) + min
+}
+
+func NewFailingReadCloser(reader io.ReadCloser, bytesBeforeFailure int64) *FailingReadCloser {
+	return &FailingReadCloser{
+		reader:    reader,
+		bytesLeft: bytesBeforeFailure,
+	}
+}
+
+func (f *FailingReadCloser) Read(p []byte) (int, error) {
+	if f.bytesLeft <= 0 {
+		return 0, io.ErrUnexpectedEOF
+	}
+
+	if int64(len(p)) > f.bytesLeft {
+		p = p[:f.bytesLeft]
+	}
+
+	n, err := f.reader.Read(p)
+	f.bytesLeft -= int64(n)
+
+	if err != nil {
+		return n, err
+	}
+
+	if f.bytesLeft <= 0 {
+		return n, io.ErrUnexpectedEOF
+	}
+
+	return n, nil
+}
+
+func (f *FailingReadCloser) Close() error {
+	return f.reader.Close()
 }
 
 func GetRequestLog(ctx context.Context) *RequestLog {

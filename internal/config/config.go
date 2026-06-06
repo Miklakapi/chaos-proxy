@@ -62,9 +62,7 @@ func ApplyDefaults(cfg Config) Config {
 		cfg.Server.IdleTimeout = 60 * time.Second
 	}
 
-	if cfg.Chaos.Latency.Request.Probability <= 0 {
-		cfg.Chaos.Latency.Request.Probability = 0.1
-	}
+	cfg.Chaos.Latency.Request.Probability = NormalizeProbability(cfg.Chaos.Latency.Request.Probability, 0.1)
 	if cfg.Chaos.Latency.Request.Min <= 0 {
 		cfg.Chaos.Latency.Request.Min = 200 * time.Millisecond
 	}
@@ -72,9 +70,7 @@ func ApplyDefaults(cfg Config) Config {
 		cfg.Chaos.Latency.Request.Max = 2000 * time.Millisecond
 	}
 
-	if cfg.Chaos.Latency.Response.Probability <= 0 {
-		cfg.Chaos.Latency.Response.Probability = 0.1
-	}
+	cfg.Chaos.Latency.Response.Probability = NormalizeProbability(cfg.Chaos.Latency.Response.Probability, 0.1)
 	if cfg.Chaos.Latency.Response.Min <= 0 {
 		cfg.Chaos.Latency.Response.Min = 200 * time.Millisecond
 	}
@@ -82,13 +78,9 @@ func ApplyDefaults(cfg Config) Config {
 		cfg.Chaos.Latency.Response.Max = 2000 * time.Millisecond
 	}
 
-	if cfg.Chaos.ConnectionFailure.Request.Probability <= 0 {
-		cfg.Chaos.ConnectionFailure.Request.Probability = 0.02
-	}
+	cfg.Chaos.ConnectionFailure.Request.Probability = NormalizeProbability(cfg.Chaos.ConnectionFailure.Request.Probability, 0.02)
 
-	if cfg.Chaos.ConnectionFailure.Response.Probability <= 0 {
-		cfg.Chaos.ConnectionFailure.Response.Probability = 0.02
-	}
+	cfg.Chaos.ConnectionFailure.Response.Probability = NormalizeProbability(cfg.Chaos.ConnectionFailure.Response.Probability, 0.02)
 	if cfg.Chaos.ConnectionFailure.Response.AfterBytesMin <= 0 {
 		cfg.Chaos.ConnectionFailure.Response.AfterBytesMin = 1024
 	}
@@ -96,9 +88,7 @@ func ApplyDefaults(cfg Config) Config {
 		cfg.Chaos.ConnectionFailure.Response.AfterBytesMax = 65536
 	}
 
-	if cfg.Chaos.BandwidthLimit.Request.Probability <= 0 {
-		cfg.Chaos.BandwidthLimit.Request.Probability = 0.1
-	}
+	cfg.Chaos.BandwidthLimit.Request.Probability = NormalizeProbability(cfg.Chaos.BandwidthLimit.Request.Probability, 0.1)
 	if cfg.Chaos.BandwidthLimit.Request.BytesPerSecondMin <= 0 {
 		cfg.Chaos.BandwidthLimit.Request.BytesPerSecondMin = 10240
 	}
@@ -106,9 +96,7 @@ func ApplyDefaults(cfg Config) Config {
 		cfg.Chaos.BandwidthLimit.Request.BytesPerSecondMax = 20480
 	}
 
-	if cfg.Chaos.BandwidthLimit.Response.Probability <= 0 {
-		cfg.Chaos.BandwidthLimit.Response.Probability = 0.1
-	}
+	cfg.Chaos.BandwidthLimit.Response.Probability = NormalizeProbability(cfg.Chaos.BandwidthLimit.Response.Probability, 0.1)
 	if cfg.Chaos.BandwidthLimit.Response.BytesPerSecondMin <= 0 {
 		cfg.Chaos.BandwidthLimit.Response.BytesPerSecondMin = 10240
 	}
@@ -117,6 +105,18 @@ func ApplyDefaults(cfg Config) Config {
 	}
 
 	return cfg
+}
+
+func NormalizeProbability(probability float64, defaultProbability float64) float64 {
+	if probability <= 0 {
+		return defaultProbability
+	}
+
+	if probability > 1 {
+		return 1
+	}
+
+	return probability
 }
 
 func Validate(cfg Config) error {
@@ -153,6 +153,26 @@ func Validate(cfg Config) error {
 				validationErrors = append(validationErrors, errors.New("proxy.target host is required"))
 			}
 		}
+	}
+
+	if cfg.Chaos.Latency.Request.Min > cfg.Chaos.Latency.Request.Max {
+		validationErrors = append(validationErrors, errors.New("chaos.latency.request.min must be less than or equal to chaos.latency.request.max"))
+	}
+
+	if cfg.Chaos.Latency.Response.Min > cfg.Chaos.Latency.Response.Max {
+		validationErrors = append(validationErrors, errors.New("chaos.latency.response.min must be less than or equal to chaos.latency.response.max"))
+	}
+
+	if cfg.Chaos.ConnectionFailure.Response.AfterBytesMin > cfg.Chaos.ConnectionFailure.Response.AfterBytesMax {
+		validationErrors = append(validationErrors, errors.New("chaos.connection_failure.response.after_bytes_min must be less than or equal to chaos.connection_failure.response.after_bytes_max"))
+	}
+
+	if cfg.Chaos.BandwidthLimit.Request.BytesPerSecondMin > cfg.Chaos.BandwidthLimit.Request.BytesPerSecondMax {
+		validationErrors = append(validationErrors, errors.New("chaos.bandwidth_limit.request.bytes_per_second_min must be less than or equal to chaos.bandwidth_limit.request.bytes_per_second_max"))
+	}
+
+	if cfg.Chaos.BandwidthLimit.Response.BytesPerSecondMin > cfg.Chaos.BandwidthLimit.Response.BytesPerSecondMax {
+		validationErrors = append(validationErrors, errors.New("chaos.bandwidth_limit.response.bytes_per_second_min must be less than or equal to chaos.bandwidth_limit.response.bytes_per_second_max"))
 	}
 
 	return errors.Join(validationErrors...)

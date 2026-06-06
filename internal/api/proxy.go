@@ -1,6 +1,7 @@
 package api
 
 import (
+	"log"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -22,6 +23,8 @@ func NewChaosProxyHandler(cfg config.ProxyConfig, responseMiddleware ResponseMid
 		proxy.ModifyResponse = responseMiddleware
 	}
 
+	proxy.ErrorHandler = HandleProxyError
+
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !cfg.PreserveHost {
 			r.Host = target.Host
@@ -33,4 +36,13 @@ func NewChaosProxyHandler(cfg config.ProxyConfig, responseMiddleware ResponseMid
 
 		proxy.ServeHTTP(w, r)
 	}, nil
+}
+
+func HandleProxyError(w http.ResponseWriter, r *http.Request, err error) {
+	requestLog := GetRequestLog(r.Context())
+	SetRequestLogStatus(requestLog, "proxy_error")
+
+	log.Printf("proxy error method=%s path=%s error=%v", r.Method, r.URL.RequestURI(), err)
+
+	http.Error(w, "bad gateway", http.StatusBadGateway)
 }
